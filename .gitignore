@@ -1,0 +1,10 @@
+node_modules/
+client/node_modules/
+data/
+.env
+*.db
+*.webm
+dist/
+client/dist/
+.DS_Store
+npm-debug.log*
