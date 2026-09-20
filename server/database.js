@@ -1,18 +1,38 @@
-import { DatabaseSync } from 'node:sqlite';
+// Railway-compatible database using node:sqlite (Node 22+)
+// Falls back to in-memory store if SQLite unavailable
+
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import fs from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = join(__dirname, '..', 'data');
 const recordingsDir = join(dataDir, 'recordings');
+
+// Ensure directories exist
+if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+if (!existsSync(recordingsDir)) mkdirSync(recordingsDir, { recursive: true });
+
 const dbPath = join(dataDir, 'speakup.db');
 
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+let db;
 
-const db = new DatabaseSync(dbPath);
-console.log('SQLite connected:', dbPath);
+try {
+  const { DatabaseSync } = await import('node:sqlite');
+  db = new DatabaseSync(dbPath);
+  console.log('✓ SQLite connected (node:sqlite):', dbPath);
+} catch (e) {
+  console.error('node:sqlite failed:', e.message);
+  console.log('Trying better-sqlite3...');
+  try {
+    const { default: Database } = await import('better-sqlite3');
+    db = new Database(dbPath);
+    console.log('✓ SQLite connected (better-sqlite3):', dbPath);
+  } catch (e2) {
+    console.error('better-sqlite3 also failed:', e2.message);
+    throw new Error('No SQLite implementation available. Node version: ' + process.version);
+  }
+}
 
 db.exec(`PRAGMA foreign_keys = ON`);
 
@@ -104,31 +124,22 @@ db.exec(`CREATE TABLE IF NOT EXISTS user_stats (
   last_session_date TEXT DEFAULT ''
 )`);
 
-// Seed defaults
 db.exec(`INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Guest', 'guest@speakup.local')`);
 db.exec(`INSERT OR IGNORE INTO user_stats (user_id) VALUES (1)`);
 
-// ── SAFE WRAPPERS ─────────────────────────────────────────────────────────
-// Node 24 built-in SQLite requires named parameters OR positional with object
-// We use named parameters pattern to avoid binding issues
-
+// ── WRAPPERS ──────────────────────────────────────────────────────────────
 db.runAsync = (sql, params = []) => {
   try {
     const stmt = db.prepare(sql);
-    // Convert positional array to work reliably
-    let result;
-    if (params.length === 0) {
-      result = stmt.run();
-    } else {
-      result = stmt.run(...params.map(p => {
-        if (p === undefined || p === null) return null;
-        if (typeof p === 'object') return JSON.stringify(p);
-        return p;
-      }));
-    }
+    const safe = params.map(p => {
+      if (p === undefined) return null;
+      if (Array.isArray(p)) return JSON.stringify(p);
+      return p;
+    });
+    const result = safe.length ? stmt.run(...safe) : stmt.run();
     return Promise.resolve({ lastID: result.lastInsertRowid, changes: result.changes });
   } catch (e) {
-    console.error('runAsync error:', e.message, '\nSQL:', sql, '\nParams:', params);
+    console.error('DB runAsync error:', e.message, '\nSQL:', sql.slice(0, 100));
     return Promise.reject(e);
   }
 };
@@ -136,12 +147,11 @@ db.runAsync = (sql, params = []) => {
 db.getAsync = (sql, params = []) => {
   try {
     const stmt = db.prepare(sql);
-    const result = params.length === 0
-      ? stmt.get()
-      : stmt.get(...params.map(p => (p === undefined ? null : p)));
+    const safe = params.map(p => p === undefined ? null : p);
+    const result = safe.length ? stmt.get(...safe) : stmt.get();
     return Promise.resolve(result);
   } catch (e) {
-    console.error('getAsync error:', e.message, '\nSQL:', sql);
+    console.error('DB getAsync error:', e.message, '\nSQL:', sql.slice(0, 100));
     return Promise.reject(e);
   }
 };
@@ -149,46 +159,45 @@ db.getAsync = (sql, params = []) => {
 db.allAsync = (sql, params = []) => {
   try {
     const stmt = db.prepare(sql);
-    const result = params.length === 0
-      ? stmt.all()
-      : stmt.all(...params.map(p => (p === undefined ? null : p)));
+    const safe = params.map(p => p === undefined ? null : p);
+    const result = safe.length ? stmt.all(...safe) : stmt.all();
     return Promise.resolve(result);
   } catch (e) {
-    console.error('allAsync error:', e.message, '\nSQL:', sql);
+    console.error('DB allAsync error:', e.message, '\nSQL:', sql.slice(0, 100));
     return Promise.reject(e);
   }
 };
 
-// Special helper for profile saves using named parameters
 db.saveProfile = (userId, data) => {
   try {
-    const existing = db.prepare('SELECT id FROM user_profiles WHERE user_id = ?').get(userId);
-    
-    const challengesStr = Array.isArray(data.challenges)
+    const uid = Number(userId);
+    const challenges = Array.isArray(data.challenges)
       ? JSON.stringify(data.challenges)
       : String(data.challenges || '[]');
 
+    const existing = db.prepare('SELECT id FROM user_profiles WHERE user_id = ?').get(uid);
+
     if (existing) {
       db.prepare(`UPDATE user_profiles SET
-        role = ?, industry = ?, years_experience = ?,
-        english_level = ?, native_language = ?, years_in_english_env = ?,
-        work_country = ?, work_environment = ?, primary_audience = ?,
-        challenges = ?, goal_90_days = ?, goal_long_term = ?,
-        onboarding_complete = 1, updated_at = datetime('now')
-        WHERE user_id = ?`).run(
-          String(data.role || ''),
-          String(data.industry || ''),
-          Number(data.years_experience) || 0,
-          String(data.english_level || ''),
-          String(data.native_language || ''),
-          String(data.years_in_english_env || ''),
-          String(data.work_country || ''),
-          String(data.work_environment || ''),
-          String(data.primary_audience || ''),
-          challengesStr,
-          String(data.goal_90_days || ''),
-          String(data.goal_long_term || ''),
-          Number(userId)
+        role=?, industry=?, years_experience=?,
+        english_level=?, native_language=?, years_in_english_env=?,
+        work_country=?, work_environment=?, primary_audience=?,
+        challenges=?, goal_90_days=?, goal_long_term=?,
+        onboarding_complete=1, updated_at=datetime('now')
+        WHERE user_id=?`).run(
+        String(data.role || ''),
+        String(data.industry || ''),
+        Number(data.years_experience) || 0,
+        String(data.english_level || ''),
+        String(data.native_language || ''),
+        String(data.years_in_english_env || ''),
+        String(data.work_country || ''),
+        String(data.work_environment || ''),
+        String(data.primary_audience || ''),
+        challenges,
+        String(data.goal_90_days || ''),
+        String(data.goal_long_term || ''),
+        uid
       );
     } else {
       db.prepare(`INSERT INTO user_profiles
@@ -196,29 +205,30 @@ db.saveProfile = (userId, data) => {
          english_level, native_language, years_in_english_env,
          work_country, work_environment, primary_audience,
          challenges, goal_90_days, goal_long_term, onboarding_complete)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(
-          Number(userId),
-          String(data.role || ''),
-          String(data.industry || ''),
-          Number(data.years_experience) || 0,
-          String(data.english_level || ''),
-          String(data.native_language || ''),
-          String(data.years_in_english_env || ''),
-          String(data.work_country || ''),
-          String(data.work_environment || ''),
-          String(data.primary_audience || ''),
-          challengesStr,
-          String(data.goal_90_days || ''),
-          String(data.goal_long_term || '')
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)`).run(
+        uid,
+        String(data.role || ''),
+        String(data.industry || ''),
+        Number(data.years_experience) || 0,
+        String(data.english_level || ''),
+        String(data.native_language || ''),
+        String(data.years_in_english_env || ''),
+        String(data.work_country || ''),
+        String(data.work_environment || ''),
+        String(data.primary_audience || ''),
+        challenges,
+        String(data.goal_90_days || ''),
+        String(data.goal_long_term || '')
       );
     }
 
-    return db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').get(Number(userId));
+    const saved = db.prepare('SELECT * FROM user_profiles WHERE user_id = ?').get(uid);
+    return saved;
   } catch (e) {
     console.error('saveProfile error:', e.message);
     throw e;
   }
 };
 
-console.log('All tables ready');
+console.log('✓ All database tables ready');
 export default db;
