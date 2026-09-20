@@ -1,8 +1,11 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
+[phases.install]
+cmds = ["npm install"]
+
 [phases.build]
-cmds = ["npm install", "npm run build"]
+cmds = ["cd client && npm install && npm run build && cd .."]
 
 [start]
-cmd = "npm start"
+cmd = "node --experimental-sqlite server/index.js"
