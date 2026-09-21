@@ -5,7 +5,8 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const rows = await db.allAsync('SELECT * FROM sessions ORDER BY created_at DESC');
+    const uid = req.query.user_id || 1;
+    const rows = await db.allAsync('SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC', [uid]);
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -20,23 +21,38 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { date, day_number, theme, completed, score, reflection } = req.body;
+    const { user_id, date, day_number, theme, completed, score, reflection } = req.body;
+    const uid = user_id || 1;
+
     const result = await db.runAsync(
-      'INSERT INTO sessions (date, day_number, theme, completed, score, reflection) VALUES (?, ?, ?, ?, ?, ?)',
-      [date, day_number || 1, theme || '', completed || 0, score || 0, reflection || '']
+      'INSERT INTO sessions (user_id, date, day_number, theme, completed, score, reflection) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [uid, date, day_number || 1, theme || '', completed || 0, score || 0, reflection || '']
     );
-    // Update streak
+
+    // Update streak using user_id not id
     const today = new Date().toISOString().slice(0, 10);
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const stats = await db.getAsync('SELECT * FROM user_stats WHERE id = 1');
-    const newStreak = stats.last_session_date === yesterday ? (stats.streak || 0) + 1 : 1;
-    const longest = Math.max(newStreak, stats.longest_streak || 0);
-    await db.runAsync(
-      'UPDATE user_stats SET streak=?, longest_streak=?, total_sessions=total_sessions+1, last_session_date=? WHERE id=1',
-      [newStreak, longest, today]
-    );
+    const stats = await db.getAsync('SELECT * FROM user_stats WHERE user_id = ?', [uid]);
+
+    if (stats) {
+      const newStreak = stats.last_session_date === yesterday ? (stats.streak || 0) + 1 : 1;
+      const longest = Math.max(newStreak, stats.longest_streak || 0);
+      await db.runAsync(
+        'UPDATE user_stats SET streak=?, longest_streak=?, total_sessions=total_sessions+1, last_session_date=? WHERE user_id=?',
+        [newStreak, longest, today, uid]
+      );
+    } else {
+      await db.runAsync(
+        'INSERT INTO user_stats (user_id, streak, longest_streak, total_sessions, last_session_date) VALUES (?,1,1,1,?)',
+        [uid, today]
+      );
+    }
+
     res.json({ id: result.lastID, ...req.body });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('Session POST error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.put('/:id', async (req, res) => {

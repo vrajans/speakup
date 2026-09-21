@@ -11,6 +11,7 @@ const NAV = [
   { id: 'sentences', icon: '💬', label: 'Power Sentences', section: null },
   { id: 'journal', icon: '📓', label: 'Wins Journal', section: null },
   { id: 'settings', icon: '⚙️', label: 'Settings', section: 'Account' },
+  { id: 'admin', icon: '📊', label: 'Admin', section: 'System' },
 ]
 
 export default function Sidebar({ current, onNavigate }) {

@@ -12,6 +12,8 @@ import Journal from './pages/Journal'
 import HabitTracker from './pages/HabitTracker'
 import Settings from './pages/Settings'
 import { useState } from 'react'
+import Admin from './pages/Admin'
+
 
 const PAGES = {
   dashboard: Dashboard,
@@ -24,6 +26,7 @@ const PAGES = {
   journal: Journal,
   habits: HabitTracker,
   settings: Settings,
+  admin: Admin
 }
 
 function AppInner() {

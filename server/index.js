@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import adminRouter from './routes/admin.js';
+
 
 dotenv.config();
 
@@ -22,6 +24,7 @@ console.log('Data directory ready:', dataDir);
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use('/recordings', express.static(recordingsDir));
+app.use('/api/admin', adminRouter);
 
 // Serve React build in production
 if (isProduction) {
